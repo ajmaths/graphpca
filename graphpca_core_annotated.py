@@ -1,24 +1,4 @@
-"""graphpca_core -- one shared GraphPCA implementation, written to be read.
-
-The public numerical conventions and validation rules are cross-checked
-against GraphPCA 0.8.0. This standalone file deliberately keeps one dense,
-explicit implementation instead of reproducing the package's module layout.
-
-DELIBERATE DEVIATIONS FROM THE OLDER graphpca_core.py. Where the two
-disagreed, this file sides with the package: (1) `laplacian_eigh` no longer
-snaps small POSITIVE eigenvalues to zero on an absolute 1e-12 rule, and
-rejects a matrix whose negative eigenvalues are too large to be round-off
-instead of silently clipping them; (2) `graph_heat_kernel` symmetrises its
-output; (3) the diffusion-potential mode mask is purely relative (the old
-max(lambda_max, 1.0) floor could discard every genuine mode after a harmless
-rescaling); (4) validation is stricter -- non-integer or non-positive
-k_keep, malformed edge lists, t <= 0 in `fit_graphpca`, and negative
-tolerances now raise where graphpca_core returned something -- matching what
-the package itself accepts; (5) `fit.potential_function` stores the
-package's spelling "diffusion_potential" (graphpca_core stored "diffusion",
-which the package rejects). Results on default paths agree with the package
-to ~1e-15; code written against graphpca_core's LOOSER argument handling may
-need small updates.
+"""graphpca_core -- a GraphPCA implementation.
 
 =========================== THE WHOLE METHOD ===========================
 
@@ -26,9 +6,10 @@ You have a graph: n vertices, m edges, an incidence operator K of shape
 (n, m), edge lengths ell of shape (m,), and a probability measure mu on the
 vertices. Each vertex y carries a scalar field S_t[:, y]. WHICH field is your
 choice and this file does not care: the current notebooks use a column of the
-heat kernel H_t (`graph_heat_kernel`), while the older math-core notebook used
-the diffusion-distance potential d_t^2/(2n) (`diffusion_distance_potential`).
-Everything below is identical either way. GraphPCA is seven lines:
+heat kernel H_t (`graph_heat_kernel`), while another option is the diffusion
+-distance potential d_t^2/(2n) (`diffusion_distance_potential`).
+
+The main construction of GraphPCA has seven lines:
 
     g_y  = K.T @ S_t[:, y]                    # edge flow of vertex y
     gbar = sum_y mu_y g_y                     # mean flow
@@ -39,18 +20,19 @@ Everything below is identical either way. GraphPCA is seven lines:
     alpha_j(y) = (g_y - gbar) . (ell * v_j)   # score of vertex y on PC j
 
 That is the entire method. Everything else in this file is checking, naming
-or drawing. `graphpca()` below is those seven lines with the validation
-lifted out, so you can read the body straight through.
+or drawing.
+
+=========================================================================
 
 There are two ways to call that function:
 
 SMALL OR EXPLANATORY EXAMPLES.  Give the scalar-field matrix and incidence
-operator directly::
+operator directly:
 
     result = graphpca(S_t, K, ell=ell, mu=mu, k_keep=20)
 
 MANY MEASURES ON ONE FIXED GRAPH (THE MNIST CASE).  The expensive gradients
-do not depend on the image measure, so compute them once per diffusion time::
+do not depend on the image measure, so compute them once per diffusion time:
 
     flows_t = edge_flows(S_t, K)       # once for this t
     result = graphpca(
@@ -60,9 +42,9 @@ do not depend on the image measure, so compute them once per diffusion time::
 
 For the 28 x 28 MNIST grid, `flows_t` has shape (1512, 784). Reusing it avoids
 performing the same matrix multiplication for every image; randomized SVD
-then computes only the leading components used by the experiment. Two
+then computes only the leading components the experiment uses. Two
 trade-offs travel with this route: the large-t cancellation guard cannot fire
-on the flows path (see `graphpca`'s docstring), and randomized SVD is an
+on the flow's path (see `graphpca`'s docstring), and randomized SVD is an
 APPROXIMATION -- at the default n_iter its eigenvalues can be off by percents,
 and `check_graphpca` will not catch that (it verifies internal consistency,
 not solver accuracy). Validate one t with solver="exact" first.
@@ -79,7 +61,7 @@ WHY THE SVD AND NOT A SQUARED MATRIX.  The classical (n, n) Gram route
 eigendecomposes U.T @ U and recovers the PCs as U q / sqrt(lambda). Forming
 the product squares the condition number -- costing roughly half the accurate
 digits in the small eigenvalues -- and the sqrt(lambda) division leaves the
-columns individually normalised but not MUTUALLY C-orthogonal once the
+columns individually normalized but not MUTUALLY C-orthogonal once the
 spectrum spans many decades. The (m, m) covariance route (this file's
 solver="direct") avoids that division and keeps C-orthonormality, but still
 squares the numbers, so its SMALL eigenvalues lose accuracy the same way --
@@ -101,12 +83,12 @@ with `align_pc_signs` or pass `sign_reference` to `fit_graphpca`. None of
 this affects the eigenvalues, the subspace, or any distance between projected
 points.
 
-RANK CEILING.  Centring costs one dimension, and only vertices with mu > 0
+RANK CEILING.  Centering costs one dimension, and only vertices with mu > 0
 contribute, so at most min(m, n_mu - 1) components exist. Ask for more and
 you get fewer.
 
 DEGENERATE BLOCKS.  When two eigenvalues are nearly equal, any rotation
-inside that pair diagonalises the covariance equally well -- so the solver's
+inside that pair diagonalizes the covariance equally well -- so the solver's
 choice of individual axes is arbitrary and must not be read as a feature. A
 cycle graph does this to every pair. What IS well defined is the magnitude
 
@@ -141,7 +123,7 @@ __all__ = [
     "check_against_package",
 ]
 
-# Palette for PC index: all six colour checks pass on a light background.
+# Palette for PC index: all six color checks pass on a light background.
 # Marker shapes give a second encoding so figures survive greyscale printing.
 PC_COLORS = ["#3B6FD4", "#E4572E", "#1B9E77", "#9467BD"]
 PC_MARKERS = ["o", "s", "^", "D"]
@@ -149,7 +131,7 @@ INK, MUTED = "#1a1a1a", "#6b6b6b"
 SEQUENTIAL_CMAP = "viridis"        # diffusion time is ordered, so: a ramp
 
 # Once the heat kernel has equilibrated (H_t -> constant), subtracting the
-# mean leaves nothing but round-off. Below this ratio the answer is noise.
+# mean leaves nothing but round-off. Below this ratio, the answer is noise.
 # No eigenvalue threshold can catch this: when the whole spectrum is noise,
 # the noise still clears a threshold measured relative to itself.
 CANCELLATION_RTOL = 1e7 * np.finfo(float).eps
@@ -327,7 +309,7 @@ def edge_flows(D, K):
 def rank_capacity(n_atoms, m):
     """How many components can exist: min(m, n_atoms - 1).
 
-    Centring costs one dimension, and a measure living on a single vertex
+    Centering costs one dimension, and a measure living on a single vertex
     gives a covariance that is identically zero.
     """
     return int(max(min(int(m), int(n_atoms) - 1), 0))
@@ -449,7 +431,7 @@ def affinity_connectivity_report(setup, evals_L, zero_rtol=1e-12,
       1. which edges sit at the affinity floor, and whether the graph falls
          apart without them  -- the combinatorial view, which names culprits;
       2. how many Laplacian eigenvalues are numerically zero;
-      3. the normalised spectral gap lambda2 / lambda_max -- the continuous
+      3. the normalized spectral gap lambda2 / lambda_max -- the continuous
          measure, and the one that actually degrades.
 
     `on_weak` is "warn" (default), "raise" or "ignore". Returns an
@@ -702,15 +684,15 @@ def graphpca(D=None, K=None, ell=None, mu=None, t=None, k_keep=40,
                when the graph is fixed and only mu changes, so K.T @ S_t is
                built once and reused.
                CAVEAT: the large-t cancellation guard cannot fire on this
-               path. It compares the centred FIELD against the raw field, and
+               path. It compares the centered FIELD against the raw field, and
                here only the flows are visible -- once the field has
-               equilibrated the flows ARE the round-off, so centring them
+               equilibrated the flows ARE the round-off, so centering them
                cancels nothing relative to themselves and the ratio never
                drops below the threshold. Keep t in a sensible range yourself
                (tau / lambda_2 with tau of order 1), or probe each t once
                through the (D, K) path first.
     ell, mu    edge lengths (default: all ones) and vertex measure (default:
-               uniform). Both are validated and mu is normalised for you.
+               uniform). Both are validated, and mu is normalized for the user.
     k_keep     how many components to return, capped at the rank ceiling.
     solver     "exact"      -- one SVD of U. The safe default: no squaring.
                "randomized" -- sklearn's randomized SVD, for large problems.
